@@ -20,6 +20,18 @@ declare global {
   }
 }
 
+const awaitTimeout = (delay, reason) =>
+  new Promise<void>((resolve, reject) =>
+    setTimeout(
+      () => (reason === undefined ? resolve() : reject(reason)),
+      delay
+    )
+  );
+
+
+const wrapPromise = (promise, delay, reason) =>
+    Promise.race([promise, awaitTimeout(delay, reason)]);
+
 let stateElement: HTMLScriptElement | undefined;
 
 export class PyodideEvaluator implements ExerciseEvaluator {
@@ -184,22 +196,40 @@ export class PyodideEvaluator implements ExerciseEvaluator {
       environment: await this.envManager.get(envLabel),
     });
 
-    const resultObject = await this.pyodide.runPythonAsync(
-      atob(require('./scripts/Python/capture.py'))
-    , { locals });
-    locals.destroy();
+    try {
+      const resultObject = await wrapPromise(this.pyodide.runPythonAsync(
+        atob(require('./scripts/Python/capture.py'))
+      , { locals }), 3000, {
+        reason: 'Execution timeout',
+      }) ;
+      locals.destroy();
+      const value = await resultObject.get("value");
+      const stdout = await resultObject.get("stdout");
+      const stderr = await resultObject.get("stderr");
+      const outputs = await resultObject.get("outputs");
 
-    const value = await resultObject.get("value");
-    const stdout = await resultObject.get("stdout");
-    const stderr = await resultObject.get("stderr");
-    const outputs = await resultObject.get("outputs");
+      return {
+        value: value as unknown,
+        stdout: stdout as string,
+        stderr: stderr as string,
+        outputs: outputs as PyProxy,
+      };
 
-    return {
-      value: value as unknown,
-      stdout: stdout as string,
-      stderr: stderr as string,
-      outputs: outputs as PyProxy,
-    };
+    } catch (e) {
+      locals.destroy();
+      const value = 1;
+      const stdout = "";
+      const stderr = e.reason;
+      const outputs = null;
+
+      return {
+        value: value as unknown,
+        stdout: stdout as string,
+        stderr: stderr as string,
+        outputs: outputs as null,
+      };
+    }
+
   }
 
   asSourceHTML(code): HTMLDivElement {
